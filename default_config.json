@@ -27,7 +27,7 @@
 			"KEY10": true,
 			"FADEIN": true,
 			"RANDOM": true,
-			"SCOREV2": false,
+			"SCOREV2": true,
 			"AUTOPLAY": false,
 			"LASTMOD": false
 		}

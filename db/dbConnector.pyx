@@ -186,6 +186,9 @@ class db:
 		if worker is None:
 			return None
 		try:
+			if not worker.ping():
+				log.info('a worker died, make a new.')
+				worker = self.pool.newWorker()
 			# Create cursor, execute query and commit
 			cursor = worker.connection.cursor(MySQLdb.cursors.DictCursor)
 			cursor.execute(query, params)
@@ -211,6 +214,9 @@ class db:
 		if worker is None:
 			return None
 		try:
+			if not worker.ping():
+				log.info('a worker died, make a new.')
+				worker = self.pool.newWorker()		
 			# Create cursor, execute the query and fetch one/all result(s)
 			cursor = worker.connection.cursor(MySQLdb.cursors.DictCursor)
 			cursor.execute(query, params)
