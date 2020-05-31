@@ -21,10 +21,31 @@ except:
 
 def getBeatmapTime(beatmapID):
 	p = 0
-	r = requests.get("http://storage.ripple.moe/api/b/{}".format(beatmapID)).text
-	if r != "null\n":
-		p = json.loads(r)['TotalLength']
- 
+	addresses = ("https://api.sayobot.cn/beatmapinfo?b={}", "http://storage.ripple.moe/api/b/{}", "https://storage.ainu.pw/api/b/{}")
+	for address in addresses:
+		try:
+			address = address.format(beatmapID)
+			response = requests.get(address)
+			if response.status_code != 200:
+				log.error("ERROR WHEN: getBeatmapTime, address[{}], plesase check status_code".format(address))
+				continue
+			if response.text in ("null\n", None, ""):
+				log.error("ERROR WHEN: getBeatmapTime, address[{}], plesase check response content".format(address))
+				continue
+
+			p = json.loads(response.text)
+			if 'sayobot' in address:
+				if p["status"] == 0:
+					p = p["data"][0]["length"]
+					break
+			else:
+				p = p['TotalLength']
+				break
+		except Exception as err:
+			log.error("ERROR WHEN: getBeatmapTime, address[{}] ({})".format(address, str(err)))
+
+	if p != 0:
+		log.info("getBeatmapTime from {}".format(address))
 	return p
 
 def PPBoard(userID, relax):
