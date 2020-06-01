@@ -1151,6 +1151,16 @@ def appendNotes(userID, notes, addNl=True, trackDate=True):
 		notes = "\n{}".format(notes)
 	glob.db.execute("UPDATE users SET notes=CONCAT(COALESCE(notes, ''),%s) WHERE id = %s LIMIT 1", [notes, userID])
 
+def setMultiaccount(userID, originalUserID):
+	"""
+	add multiaccount info
+	"""
+	log.info("add multiaccount record to user {}, {}".format(userID, originalUserID))
+	glob.db.execute("UPDATE users SET multiaccount_flag = 1, original_id = %s, related_accounts=CONCAT(COALESCE(related_accounts, ''),%s) WHERE id = %s LIMIT 1", 
+					[originalUserID, str(originalUserID) + ',', userID])
+	glob.db.execute("UPDATE users SET multiaccount_flag = 1, related_accounts=CONCAT(COALESCE(related_accounts, ''),%s), multiaccount_count=COALESCE(multiaccount_count, 0)+1 WHERE id = %s LIMIT 1", 
+					[str(userID) + ',', originalUserID])
+
 def getPrivileges(userID):
 	"""
 	Return `userID`'s privileges
@@ -1526,19 +1536,22 @@ def logHardware(userID, hashes, activation = False):
 
 			if i["occurencies"] >= perc:
 				# If the banned user has logged in more than 10% of the times from this user, restrict this user
-				restrict(userID)
-				appendNotes(userID, "Logged in from HWID ({hwid}) used more than 10% from user {banned} ({bannedUserID}), who is banned/restricted.".format(
-					hwid=hashes[2:5],
-					banned=i["username"],
-					bannedUserID=i["userid"]
-				))
-				log.warning("**{user}** ({userID}) has been restricted because he has logged in from HWID _({hwid})_ used more than 10% from banned/restricted user **{banned}** ({bannedUserID}), **possible multiaccount**.".format(
-					user=username,
-					userID=userID,
-					hwid=hashes[2:5],
-					banned=i["username"],
-					bannedUserID=i["userid"]
-				), "cm")
+				# restrict(userID)
+				log.warning("user: {}({}) 's Hardware ID is similar to user {} (than 10%), its may multiaccount ({}).".format(i["username"], userID, i["userid"], hashes[2:5]))
+				appendNotes(userID, "User Logged in similar Hardware ID {} belong to user {}.".format(hashes[2:5], i["userid"]))
+				log.info("[ userUtils.py ] Hardware restrict is disabled, user allowed.")
+				# appendNotes(userID, "Logged in from HWID ({hwid}) used more than 10% from user {banned} ({bannedUserID}), who is banned/restricted.".format(
+				# 	hwid=hashes[2:5],
+				# 	banned=i["username"],
+				# 	bannedUserID=i["userid"]
+				# ))
+				# log.warning("**{user}** ({userID}) has been restricted because he has logged in from HWID _({hwid})_ used more than 10% from banned/restricted user **{banned}** ({bannedUserID}), **possible multiaccount**.".format(
+				# 	user=username,
+				# 	userID=userID,
+				# 	hwid=hashes[2:5],
+				# 	banned=i["username"],
+				# 	bannedUserID=i["userid"]
+				# ), "cm")
 
 	# Update hash set occurencies
 	glob.db.execute("""
@@ -1592,7 +1605,7 @@ def verifyUser(userID, hashes):
 	# Make sure there are no other accounts activated with this exact mac/unique id/hwid
 	if hashes[2] == "b4ec3c4334a0249dae95c284ec5983df" or hashes[4] == "ffae06fb022871fe9beb58b005c5e21d":
 		# Running under wine, check only by uniqueid
-		log.info("{user} ({userID}) ha triggerato Sannino:\n**Full data:** {hashes}\n**Usual wine mac address hash:** b4ec3c4334a0249dae95c284ec5983df\n**Usual wine disk id:** ffae06fb022871fe9beb58b005c5e21d".format(user=username, userID=userID, hashes=hashes), "bunker")
+		log.info("{user} ({userID}) faked:\n**Full data:** {hashes}\n**Usual wine mac address hash:** b4ec3c4334a0249dae95c284ec5983df\n**Usual wine disk id:** ffae06fb022871fe9beb58b005c5e21d".format(user=username, userID=userID, hashes=hashes), "bunker")
 		log.debug("Veryfing with Linux/Mac hardware")
 		match = glob.db.fetchAll("SELECT userid FROM hw_user WHERE unique_id = %(uid)s AND userid != %(userid)s AND activated = 1 LIMIT 1", {
 			"uid": hashes[3],
@@ -1609,37 +1622,46 @@ def verifyUser(userID, hashes):
 		})
 
 	if match:
-		# This is a multiaccount, restrict other account and ban this account
-
-		# Get original userID and username (lowest ID)
+		# This is a multiaccount
+		# Get original userID and username
 		originalUserID = match[0]["userid"]
 		originalUsername = getUsername(originalUserID)
 
-		# Ban this user and append notes
-		ban(userID)	# this removes the USER_PENDING_VERIFICATION flag too
+		# add note and flag
+		log.info("find multiaccount user, user id {}.".format(userID))
 		appendNotes(userID, "{}'s multiaccount ({}), found HWID match while verifying account ({})".format(originalUsername, originalUserID, hashes[2:5]))
 		appendNotes(originalUserID, "Has created multiaccount {} ({})".format(username, userID))
-
-		# Restrict the original
-		restrict(originalUserID)
+		setMultiaccount(userID, originalUserID)
+		
+		# Check the number of accounts
+		multiaccountCount = glob.db.fetch("SELECT multiaccount_count FROM users WHERE id = %s", [originalUserID])["multiaccount_count"]
+		if multiaccountCount >= 5:
+			log.info("Number of registrations exceeds the limit, banned: {}, multiaccount_count: {}".format(userID, multiaccountCount))
+			# Ban this user and append notes
+			ban(userID)	# this removes the USER_PENDING_VERIFICATION flag too
+			# Restrict the original
+			restrict(originalUserID)
+			# Disallow login
+			return False
+		
+		# allowed
+		log.info("Auto ban is disabled! allow multiaccount! userid: {}, multiaccount_count: {}".format(userID, multiaccountCount))
 
 		# Discord message
-		log.warning("User **{originalUsername}** ({originalUserID}) has been restricted because he has created multiaccount **{username}** ({userID}). The multiaccount has been banned.".format(
+		log.warning("User **{originalUsername}** ({originalUserID}) has created multiaccount **{username}** ({userID}).".format(
 			originalUsername=originalUsername,
 			originalUserID=originalUserID,
 			username=username,
 			userID=userID
 		), "cm")
 
-		# Disallow login
-		return False
-	else:
-		# No matches found, set USER_PUBLIC and USER_NORMAL flags and reset USER_PENDING_VERIFICATION flag
-		resetPendingFlag(userID)
-		#log.info("User **{}** ({}) has verified his account with hash set _{}_".format(username, userID, hashes[2:5]), "cm")
 
-		# Allow login
-		return True
+	# No matches found, set USER_PUBLIC and USER_NORMAL flags and reset USER_PENDING_VERIFICATION flag
+	resetPendingFlag(userID)
+	#log.info("User **{}** ({}) has verified his account with hash set _{}_".format(username, userID, hashes[2:5]), "cm")
+
+	# Allow login
+	return True
 
 def hasVerifiedHardware(userID):
 	"""
