@@ -1077,7 +1077,7 @@ def isLocked(userID):
 	else:
 		return True
 
-def ban(userID):
+def ban(userID, bannedHandler=""):
 	"""
 	Ban userID
 
@@ -1087,8 +1087,8 @@ def ban(userID):
 	if not isBanned(userID):
 		# Set user as banned in db
 		banDateTime = int(time.time())
-		glob.db.execute("UPDATE users SET privileges = privileges & %s, ban_datetime = %s WHERE id = %s LIMIT 1",
-						[~(privileges.USER_NORMAL | privileges.USER_PUBLIC), banDateTime, userID])
+		glob.db.execute("UPDATE users SET privileges = privileges & %s, ban_datetime = %s banned_handler = CONCAT(COALESCE(banned_handler, ''), %s) WHERE id = %s LIMIT 1",
+						[~(privileges.USER_NORMAL | privileges.USER_PUBLIC), banDateTime, bannedHandler, userID])
 
 		# Notify bancho about the ban
 		glob.redis.publish("peppy:ban", userID)
@@ -1159,9 +1159,9 @@ def appendNotes(userID, notes, addNl=True, trackDate=True):
 	glob.db.execute("UPDATE users SET notes=CONCAT(COALESCE(notes, ''),%s) WHERE id = %s LIMIT 1", [notes, userID])
 
 
-def getMultiaccoounts(originalUserID):
+def getMultiaccounts(originalUserID):
 	"""
-	get this id's all getMultiaccoounts
+	get this id's all getMultiaccounts
 	"""
 	ids = [i["id"] for i in glob.db.fetchAll("SELECT id FROM users WHERE original_id = %s", [originalUserID])]
 	log.info("Get all accounts belonging to user {}, count {}".format(originalUserID, len(ids)))
@@ -1516,9 +1516,10 @@ def logHardware(userID, hashes, activation = False):
 		if hashes[2] == "b4ec3c4334a0249dae95c284ec5983df":
 			# Running under wine, check by unique id
 			log.debug("Logging Linux/Mac hardware")
-			banned = glob.db.fetchAll("""SELECT users.id as userid, hw_user.occurencies, users.username FROM hw_user
+			banned = glob.db.fetchAll("""SELECT users.id as userid, hw_user.occurencies, users.username, users.banned_handler FROM hw_user
 				LEFT JOIN users ON users.id = hw_user.userid
 				WHERE hw_user.userid != %(userid)s
+				AND users.banned_handler != multiaccount_overlimit_ban_single
 				AND hw_user.unique_id = %(uid)s
 				AND (users.privileges & 3 != 3)""", {
 					"userid": userID,
@@ -1527,9 +1528,10 @@ def logHardware(userID, hashes, activation = False):
 		else:
 			# Running under windows, do all checks
 			log.debug("Logging Windows hardware")
-			banned = glob.db.fetchAll("""SELECT users.id as userid, hw_user.occurencies, users.username FROM hw_user
+			banned = glob.db.fetchAll("""SELECT users.id as userid, hw_user.occurencies, users.username, users.banned_handler FROM hw_user
 				LEFT JOIN users ON users.id = hw_user.userid
 				WHERE hw_user.userid != %(userid)s
+				AND users.banned_handler != multiaccount_overlimit_ban_single
 				AND hw_user.mac = %(mac)s
 				AND hw_user.unique_id = %(uid)s
 				AND hw_user.disk_id = %(diskid)s
@@ -1554,25 +1556,22 @@ def logHardware(userID, hashes, activation = False):
 			if i["occurencies"] >= perc:
 				# maby mulitaccount
 				log.warning("user: {}({}) 's Hardware ID is similar to user {} (than 10%), its may multiaccount ({}).".format(i["username"], userID, i["userid"], hashes[2:5]))
-				if glob.conf.extra["multiaccount"]["allowed"] == False:
-					# If the banned user has logged in more than 10% of the times from this user, restrict this user
-					restrict(userID)
-					appendNotes(userID, "Not allowing multiaccount, so it was banned".format(
-						hwid=hashes[2:5],
-						banned=i["username"],
-						bannedUserID=i["userid"]
-					))
-					log.warning("**{user}** ({userID}) has been restricted because he has logged in from HWID _({hwid})_ used more than 10% from banned/restricted user **{banned}** ({bannedUserID}), **possible multiaccount**.".format(
-						user=username,
-						userID=userID,
-						hwid=hashes[2:5],
-						banned=i["username"],
-						bannedUserID=i["userid"]
-					), "cm")
-				else:
-					log.info("Allowing multiaccount, so this user was allowed.")
-					appendNotes(userID, "Logged in similar Hardware ID belong to user {}. ".format(i["userid"]))
-				
+				# If the banned user has logged in more than 10% of the times from this user, restrict this user
+				restrict(userID)
+				appendNotes(userID, "Not allowing multiaccount, so it was banned".format(
+					hwid=hashes[2:5],
+					banned=i["username"],
+					bannedUserID=i["userid"]
+				))
+				log.warning("**{user}** ({userID}) has been restricted because he has logged in from HWID _({hwid})_ used more than 10% from banned/restricted user **{banned}** ({bannedUserID}), **possible multiaccount**.".format(
+					user=username,
+					userID=userID,
+					hwid=hashes[2:5],
+					banned=i["username"],
+					bannedUserID=i["userid"]
+				), "cm")
+
+
 	# Update hash set occurencies
 	glob.db.execute("""
 				INSERT INTO hw_user (id, userid, mac, unique_id, disk_id, occurencies) VALUES (NULL, %s, %s, %s, %s, 1)
@@ -1651,7 +1650,7 @@ def verifyUser(userID, hashes):
 		log.warning("find multiaccount user, user id {}.".format(userID))
 		appendNotes(userID, "{}'s multiaccount ({}), found HWID match while verifying account ({}) ".format(originalUsername, originalUserID, hashes[2:5]))
 		appendNotes(originalUserID, "Has created multiaccount {} ({}) ".format(username, userID))
-		# set mutiaccount flag
+		# set multiaccount flag
 		setMultiaccount(userID, originalUserID)
 		
 		# Check the number of accounts
@@ -1666,7 +1665,7 @@ def verifyUser(userID, hashes):
 			log.warning("User({}) Number of registrations exceeds the limit({}/{}), handler: {}".format(originalUserID, multiaccountCount, countLimit, overLimit))
 			if overLimit == "ban-all":
 				# get all multiaccounts belonging to originalUserID
-				multiaccounts = getMultiaccoounts(originalUserID)
+				multiaccounts = getMultiaccounts(originalUserID)
 				log.warning("Handler [{}] these ids will be banned: {}, and original will be banned: {}".format(overLimit, multiaccounts, originalUserID))
 				# fot each multiaccount
 				for account in multiaccounts:
@@ -1684,7 +1683,7 @@ def verifyUser(userID, hashes):
 				log.warning("Handler [{}] id banned: {}".format(overLimit, userID))
 				appendNotes(userID, "Banned beacuse Original User({})'s number of registrations exceeds the limit({})".format(originalUserID, countLimit))
 				# Ban this user and append notes
-				ban(userID)
+				ban(userID, "multiaccount_overlimit_ban_single")
 				# Disallow login
 				return False 
 
