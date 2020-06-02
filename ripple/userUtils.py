@@ -1158,6 +1158,16 @@ def appendNotes(userID, notes, addNl=True, trackDate=True):
 		notes = "\n{}".format(notes)
 	glob.db.execute("UPDATE users SET notes=CONCAT(COALESCE(notes, ''),%s) WHERE id = %s LIMIT 1", [notes, userID])
 
+
+def getMultiaccoounts(originalUserID):
+	"""
+	get this id's all getMultiaccoounts
+	"""
+	ids = [i["id"] for i in glob.db.fetchAll("SELECT id FROM users WHERE original_id = %s", [originalUserID])]
+	log.info("Get all accounts belonging to user {}, count {}".format(originalUserID, len(ids)))
+	return ids
+
+
 def setMultiaccount(userID, originalUserID):
 	"""
 	add multiaccount info
@@ -1641,6 +1651,7 @@ def verifyUser(userID, hashes):
 		log.warning("find multiaccount user, user id {}.".format(userID))
 		appendNotes(userID, "{}'s multiaccount ({}), found HWID match while verifying account ({}) ".format(originalUsername, originalUserID, hashes[2:5]))
 		appendNotes(originalUserID, "Has created multiaccount {} ({}) ".format(username, userID))
+		# set mutiaccount flag
 		setMultiaccount(userID, originalUserID)
 		
 		# Check the number of accounts
@@ -1654,15 +1665,21 @@ def verifyUser(userID, hashes):
 		if multiaccountCount > countLimit:
 			log.warning("User({}) Number of registrations exceeds the limit({}/{}), handler: {}".format(originalUserID, multiaccountCount, countLimit, overLimit))
 			if overLimit == "ban-all":
-				log.warning("Handler [{}] id banned: {}, original id banned: {}".format(overLimit, userID, originalUserID))
-				appendNotes(userID, "Banned beacuse Original User({})'s number of registrations exceeds the limit({})".format(originalUserID, countLimit))
-				appendNotes(originalUserID, "Banned beacuse number of registrations exceeds the limit({})".format(countLimit))
-				# Ban this user and append notes
-				ban(userID)
+				# get all multiaccounts belonging to originalUserID
+				multiaccounts = getMultiaccoounts(originalUserID)
+				log.warning("Handler [{}] these ids will be banned: {}, and original will be banned: {}".format(overLimit, multiaccounts, originalUserID))
+				# fot each multiaccount
+				for account in multiaccounts:
+					# Ban this user and append notes
+					appendNotes(account, "Banned beacuse Original User({})'s number of registrations exceeds the limit({})".format(originalUserID, countLimit))
+					ban(account)
+
 				# Restrict the original
+				appendNotes(originalUserID, "Banned beacuse number of registrations exceeds the limit({})".format(countLimit))
 				restrict(originalUserID) 
 				# Disallow login
 				return False 
+
 			elif overLimit == "ban":
 				log.warning("Handler [{}] id banned: {}".format(overLimit, userID))
 				appendNotes(userID, "Banned beacuse Original User({})'s number of registrations exceeds the limit({})".format(originalUserID, countLimit))
@@ -1670,6 +1687,7 @@ def verifyUser(userID, hashes):
 				ban(userID)
 				# Disallow login
 				return False 
+
 			else:
 				log.info("Handler [{}] Will not do anything".format(overLimit))
 
