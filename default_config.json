@@ -56,5 +56,10 @@
 		"anticheat": true,
 		"rank-all-maps": false,
 		"no-pp-cap": false
+	},
+	"multiaccount": {
+		"allowed": true,
+		"count": 3,
+		"overlimit": "ban-all"
 	}
 }

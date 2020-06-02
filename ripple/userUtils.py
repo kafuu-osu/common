@@ -1084,16 +1084,20 @@ def ban(userID):
 	:param userID: user id
 	:return:
 	"""
-	# Set user as banned in db
-	banDateTime = int(time.time())
-	glob.db.execute("UPDATE users SET privileges = privileges & %s, ban_datetime = %s WHERE id = %s LIMIT 1",
-					[~(privileges.USER_NORMAL | privileges.USER_PUBLIC), banDateTime, userID])
+	if not isBanned(userID):
+		# Set user as banned in db
+		banDateTime = int(time.time())
+		glob.db.execute("UPDATE users SET privileges = privileges & %s, ban_datetime = %s WHERE id = %s LIMIT 1",
+						[~(privileges.USER_NORMAL | privileges.USER_PUBLIC), banDateTime, userID])
 
-	# Notify bancho about the ban
-	glob.redis.publish("peppy:ban", userID)
+		# Notify bancho about the ban
+		glob.redis.publish("peppy:ban", userID)
 
-	# Remove the user from global and country leaderboards
-	removeFromLeaderboard(userID)
+		# Remove the user from global and country leaderboards
+		removeFromLeaderboard(userID)
+		log.warning("User {} is banned from now!".format(userID))
+	else:
+		log.warning("User {} is already banned!".format(userID))
 
 def unban(userID):
 	"""
@@ -1124,6 +1128,9 @@ def restrict(userID):
 
 		# Remove the user from global and country leaderboards
 		removeFromLeaderboard(userID)
+		log.warning("User {} is restricted from now!".format(userID))
+	else:
+		log.warning("User {} is already restricted!".format(userID))
 
 def unrestrict(userID):
 	"""
@@ -1155,7 +1162,7 @@ def setMultiaccount(userID, originalUserID):
 	"""
 	add multiaccount info
 	"""
-	log.info("add multiaccount record to user {}, {}".format(userID, originalUserID))
+	log.info("Added multiaccount record to user {}, {}".format(userID, originalUserID))
 	glob.db.execute("UPDATE users SET multiaccount_flag = 1, original_id = %s, related_accounts=CONCAT(COALESCE(related_accounts, ''),%s) WHERE id = %s LIMIT 1", 
 					[originalUserID, str(originalUserID) + ',', userID])
 	glob.db.execute("UPDATE users SET multiaccount_flag = 1, related_accounts=CONCAT(COALESCE(related_accounts, ''),%s), multiaccount_count=COALESCE(multiaccount_count, 0)+1 WHERE id = %s LIMIT 1", 
@@ -1535,24 +1542,27 @@ def logHardware(userID, hashes, activation = False):
 			perc = (total*10)/100
 
 			if i["occurencies"] >= perc:
-				# If the banned user has logged in more than 10% of the times from this user, restrict this user
-				# restrict(userID)
+				# maby mulitaccount
 				log.warning("user: {}({}) 's Hardware ID is similar to user {} (than 10%), its may multiaccount ({}).".format(i["username"], userID, i["userid"], hashes[2:5]))
-				appendNotes(userID, "User Logged in similar Hardware ID {} belong to user {}.".format(hashes[2:5], i["userid"]))
-				log.info("[ userUtils.py ] Hardware restrict is disabled, user allowed.")
-				# appendNotes(userID, "Logged in from HWID ({hwid}) used more than 10% from user {banned} ({bannedUserID}), who is banned/restricted.".format(
-				# 	hwid=hashes[2:5],
-				# 	banned=i["username"],
-				# 	bannedUserID=i["userid"]
-				# ))
-				# log.warning("**{user}** ({userID}) has been restricted because he has logged in from HWID _({hwid})_ used more than 10% from banned/restricted user **{banned}** ({bannedUserID}), **possible multiaccount**.".format(
-				# 	user=username,
-				# 	userID=userID,
-				# 	hwid=hashes[2:5],
-				# 	banned=i["username"],
-				# 	bannedUserID=i["userid"]
-				# ), "cm")
-
+				if glob.conf.extra["multiaccount"]["allowed"] == False:
+					# If the banned user has logged in more than 10% of the times from this user, restrict this user
+					restrict(userID)
+					appendNotes(userID, "Not allowing multiaccount, so it was banned".format(
+						hwid=hashes[2:5],
+						banned=i["username"],
+						bannedUserID=i["userid"]
+					))
+					log.warning("**{user}** ({userID}) has been restricted because he has logged in from HWID _({hwid})_ used more than 10% from banned/restricted user **{banned}** ({bannedUserID}), **possible multiaccount**.".format(
+						user=username,
+						userID=userID,
+						hwid=hashes[2:5],
+						banned=i["username"],
+						bannedUserID=i["userid"]
+					), "cm")
+				else:
+					log.info("Allowing multiaccount, so this user was allowed.")
+					appendNotes(userID, "Logged in similar Hardware ID belong to user {}. ".format(i["userid"]))
+				
 	# Update hash set occurencies
 	glob.db.execute("""
 				INSERT INTO hw_user (id, userid, mac, unique_id, disk_id, occurencies) VALUES (NULL, %s, %s, %s, %s, 1)
@@ -1627,32 +1637,53 @@ def verifyUser(userID, hashes):
 		originalUserID = match[0]["userid"]
 		originalUsername = getUsername(originalUserID)
 
-		# add note and flag
-		log.info("find multiaccount user, user id {}.".format(userID))
-		appendNotes(userID, "{}'s multiaccount ({}), found HWID match while verifying account ({})".format(originalUsername, originalUserID, hashes[2:5]))
-		appendNotes(originalUserID, "Has created multiaccount {} ({})".format(username, userID))
+		# add multiaccount note and flag
+		log.warning("find multiaccount user, user id {}.".format(userID))
+		appendNotes(userID, "{}'s multiaccount ({}), found HWID match while verifying account ({}) ".format(originalUsername, originalUserID, hashes[2:5]))
+		appendNotes(originalUserID, "Has created multiaccount {} ({}) ".format(username, userID))
 		setMultiaccount(userID, originalUserID)
 		
 		# Check the number of accounts
 		multiaccountCount = glob.db.fetch("SELECT multiaccount_count FROM users WHERE id = %s", [originalUserID])["multiaccount_count"]
-		if multiaccountCount >= 5:
-			log.info("Number of registrations exceeds the limit, banned: {}, multiaccount_count: {}".format(userID, multiaccountCount))
-			# Ban this user and append notes
-			ban(userID)	# this removes the USER_PENDING_VERIFICATION flag too
-			# Restrict the original
-			restrict(originalUserID)
-			# Disallow login
-			return False
+		countLimit = glob.conf.extra["multiaccount"]["count"]
+		overLimit = glob.conf.extra["multiaccount"]["overlimit"]
+		allowed = glob.conf.extra["multiaccount"]["allowed"]
+		if allowed == False: 
+			log.info("Multiaccount is disabled.")
+			countLimit = 0
+		if multiaccountCount > countLimit:
+			log.warning("User({}) Number of registrations exceeds the limit({}/{}), handler: {}".format(originalUserID, multiaccountCount, countLimit, overLimit))
+			if overLimit == "ban-all":
+				log.warning("Handler [{}] id banned: {}, original id banned: {}".format(overLimit, userID, originalUserID))
+				appendNotes(userID, "Banned beacuse Original User({})'s number of registrations exceeds the limit({})".format(originalUserID, countLimit))
+				appendNotes(originalUserID, "Banned beacuse number of registrations exceeds the limit({})".format(countLimit))
+				# Ban this user and append notes
+				ban(userID)
+				# Restrict the original
+				restrict(originalUserID) 
+				# Disallow login
+				return False 
+			elif overLimit == "ban":
+				log.warning("Handler [{}] id banned: {}".format(overLimit, userID))
+				appendNotes(userID, "Banned beacuse Original User({})'s number of registrations exceeds the limit({})".format(originalUserID, countLimit))
+				# Ban this user and append notes
+				ban(userID)
+				# Disallow login
+				return False 
+			else:
+				log.info("Handler [{}] Will not do anything".format(overLimit))
+
 		
 		# allowed
-		log.info("Auto ban is disabled! allow multiaccount! userid: {}, multiaccount_count: {}".format(userID, multiaccountCount))
+		log.info("Auto ban is disabled! allow multiaccount! userid: {}, multiaccount_count: {}, hardware id: {}".format(userID, multiaccountCount, hashes[2:5]))
 
 		# Discord message
-		log.warning("User **{originalUsername}** ({originalUserID}) has created multiaccount **{username}** ({userID}).".format(
+		log.warning("User **{originalUsername}** ({originalUserID}) has created multiaccount **{username}** ({userID}) with hardware id {hardware}.".format(
 			originalUsername=originalUsername,
 			originalUserID=originalUserID,
 			username=username,
-			userID=userID
+			userID=userID,
+			hardware=hashes[2:5]
 		), "cm")
 
 
