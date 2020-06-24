@@ -1084,20 +1084,19 @@ def ban(userID, bannedHandler=""):
 	:param userID: user id
 	:return:
 	"""
-	if not isBanned(userID):
-		# Set user as banned in db
-		banDateTime = int(time.time())
-		glob.db.execute("UPDATE users SET privileges = privileges & %s, ban_datetime = %s banned_handler = CONCAT(COALESCE(banned_handler, ''), %s) WHERE id = %s LIMIT 1",
-						[~(privileges.USER_NORMAL | privileges.USER_PUBLIC), banDateTime, bannedHandler, userID])
 
-		# Notify bancho about the ban
-		glob.redis.publish("peppy:ban", userID)
+	# Set user as banned in db
+	banDateTime = int(time.time())
+	glob.db.execute("UPDATE users SET privileges = privileges & %s, ban_datetime = %s, banned_handler = CONCAT(COALESCE(banned_handler, ''), %s) WHERE id = %s LIMIT 1",
+					[~(privileges.USER_NORMAL | privileges.USER_PUBLIC), banDateTime, bannedHandler, userID])
 
-		# Remove the user from global and country leaderboards
-		removeFromLeaderboard(userID)
-		log.warning("User {} is banned from now!".format(userID))
-	else:
-		log.warning("User {} is already banned!".format(userID))
+	# Notify bancho about the ban
+	glob.redis.publish("peppy:ban", userID)
+
+	# Remove the user from global and country leaderboards
+	removeFromLeaderboard(userID)
+	log.warning("User {} is banned from now!".format(userID))
+
 
 def unban(userID):
 	"""
@@ -1117,20 +1116,17 @@ def restrict(userID):
 	:param userID: user id
 	:return:
 	"""
-	if not isRestricted(userID):
-		# Set user as restricted in db
-		banDateTime = int(time.time())
-		glob.db.execute("UPDATE users SET privileges = privileges & %s, ban_datetime = %s WHERE id = %s LIMIT 1",
-						[~privileges.USER_PUBLIC, banDateTime, userID])
+	# Set user as restricted in db
+	banDateTime = int(time.time())
+	glob.db.execute("UPDATE users SET privileges = privileges & %s, ban_datetime = %s WHERE id = %s LIMIT 1",
+					[~privileges.USER_PUBLIC, banDateTime, userID])
 
-		# Notify bancho about this ban
-		glob.redis.publish("peppy:ban", userID)
+	# Notify bancho about this ban
+	glob.redis.publish("peppy:ban", userID)
 
-		# Remove the user from global and country leaderboards
-		removeFromLeaderboard(userID)
-		log.warning("User {} is restricted from now!".format(userID))
-	else:
-		log.warning("User {} is already restricted!".format(userID))
+	# Remove the user from global and country leaderboards
+	removeFromLeaderboard(userID)
+	log.warning("User {} is restricted from now!".format(userID))
 
 def unrestrict(userID):
 	"""
@@ -1172,11 +1168,17 @@ def setMultiaccount(userID, originalUserID):
 	"""
 	add multiaccount info
 	"""
-	log.info("Added multiaccount record to user {}, {}".format(userID, originalUserID))
-	glob.db.execute("UPDATE users SET multiaccount_flag = 1, original_id = %s, related_accounts=CONCAT(COALESCE(related_accounts, ''),%s) WHERE id = %s LIMIT 1", 
-					[originalUserID, str(originalUserID) + ',', userID])
-	glob.db.execute("UPDATE users SET multiaccount_flag = 1, related_accounts=CONCAT(COALESCE(related_accounts, ''),%s), multiaccount_count=COALESCE(multiaccount_count, 0)+1 WHERE id = %s LIMIT 1", 
-					[str(userID) + ',', originalUserID])
+
+	r1 = glob.db.fetch("SELECT related_accounts FROM users WHERE id = %s LIMIT 1", [userID])
+	if r1 in (None, ''):
+		log.info("Added multiaccount record to user -> {} <-, {}".format(userID, originalUserID))
+		glob.db.execute("UPDATE users SET multiaccount_flag = 1, original_id = %s, related_accounts=CONCAT(COALESCE(related_accounts, ''),%s) WHERE id = %s LIMIT 1", 
+						[originalUserID, str(originalUserID) + ',', userID])
+	r2 = glob.db.fetch("SELECT related_accounts FROM users WHERE id = %s LIMIT 1", [originalUserID])
+	if r2 in (None, ''):
+		log.info("Added multiaccount record to user {}, -> {} <-".format(userID, originalUserID))
+		glob.db.execute("UPDATE users SET multiaccount_flag = 1, related_accounts=CONCAT(COALESCE(related_accounts, ''),%s), multiaccount_count=COALESCE(multiaccount_count, 0)+1 WHERE id = %s LIMIT 1", 
+						[str(userID) + ',', originalUserID])
 
 def getPrivileges(userID):
 	"""
@@ -1519,10 +1521,11 @@ def logHardware(userID, hashes, activation = False):
 			banned = glob.db.fetchAll("""SELECT users.id as userid, hw_user.occurencies, users.username, users.banned_handler FROM hw_user
 				LEFT JOIN users ON users.id = hw_user.userid
 				WHERE hw_user.userid != %(userid)s
-				AND users.banned_handler != multiaccount_overlimit_ban_single
+				AND users.banned_handler != %(handler)s
 				AND hw_user.unique_id = %(uid)s
 				AND (users.privileges & 3 != 3)""", {
 					"userid": userID,
+					"handler": "multiaccount_overlimit_ban_single",
 					"uid": hashes[3],
 				})
 		else:
@@ -1531,12 +1534,13 @@ def logHardware(userID, hashes, activation = False):
 			banned = glob.db.fetchAll("""SELECT users.id as userid, hw_user.occurencies, users.username, users.banned_handler FROM hw_user
 				LEFT JOIN users ON users.id = hw_user.userid
 				WHERE hw_user.userid != %(userid)s
-				AND users.banned_handler != multiaccount_overlimit_ban_single
+				AND users.banned_handler != %(handler)s
 				AND hw_user.mac = %(mac)s
 				AND hw_user.unique_id = %(uid)s
 				AND hw_user.disk_id = %(diskid)s
 				AND (users.privileges & 3 != 3)""", {
 					"userid": userID,
+					"handler": "multiaccount_overlimit_ban_single",
 					"mac": hashes[2],
 					"uid": hashes[3],
 					"diskid": hashes[4],
@@ -1676,6 +1680,9 @@ def verifyUser(userID, hashes):
 				# Restrict the original
 				appendNotes(originalUserID, "Banned beacuse number of registrations exceeds the limit({})".format(countLimit))
 				restrict(originalUserID) 
+
+				# Ban this user and append notes
+				ban(userID, "multiaccount_overlimit_ban")
 				# Disallow login
 				return False 
 
