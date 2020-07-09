@@ -9,21 +9,22 @@ class Client:
 	def __init__(self, serverUrl=None):
 		self.sio = socketio.Client()
 		self.sioServer = serverUrl
+
 		if self.sioServer: self.connect()
+		self.sio.on('disconnect', self.handleDisconnect)
 
 	def send(self, event, data, userData={}):
 		sendTime = time.time()
 		if not self.sio.sid: self.connect()
 		
 		eventId = str(uuid.uuid1())
-		baseData = {'eventId': eventId,'time': sendTime}
 		
 		# Send event
 		self.sio.emit(
-			'adapter.emitToBus', { **baseData, 'event': event, 'args': data })
+			'adapter.emitToBus', (event, eventId, data, sendTime ))
 		# Update user data
 		if userData: self.sio.emit(
-			'adapter.emitToBus', { **baseData, 'event': 'user.updateStateFromPep', 'userData': userData })
+			'adapter.emitToBus', ('user.updateStateFromPep', eventId, userData, sendTime ))
 
 		log.info('socketio sended event: {}, user: {}({}), time spent: {}s'.format(
 			event, userData.get('username'), userData.get('userID'), time.time()-sendTime))
@@ -34,5 +35,12 @@ class Client:
 			log.info('socketio server connected: {}'.format(self.sio.sid))
 		except Exception as err:
 			log.warning('socketio connect failed, err: {}'.format(err))
+
+	def handleDisconnect(self):
+		self.sio.disconnect()
+		log.info('socketio server disconnect!')
+		log.info('try to reconnecting...')
+		self.connect()
+		log.info('socketio server reconnected!')
 
 
