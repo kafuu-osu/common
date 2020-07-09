@@ -61,5 +61,9 @@
 		"allowed": true,
 		"count": 3,
 		"overlimit": "ban-all"
+	},
+	"socketio": {
+		"enabled": false,
+		"server": ""
 	}
 }
