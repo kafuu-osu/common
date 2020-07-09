@@ -13,7 +13,7 @@ class Client:
 		if self.sioServer: self.connect()
 		self.sio.on('disconnect', self.handleDisconnect)
 
-	def send(self, event, data, userData={}):
+	def send(self, event, data, userData={}, namespace=None):
 		sendTime = time.time()
 		if not self.sio.sid: self.connect()
 		
@@ -21,7 +21,7 @@ class Client:
 		
 		# Send event
 		self.sio.emit(
-			'adapter.emitToBus', (event, eventId, data, sendTime ))
+			'adapter.emitToBus', (event, eventId, data, sendTime ), namespace=namespace)
 		# Update user data
 		if userData: self.sio.emit(
 			'adapter.emitToBus', ('user.updateStateFromPep', eventId, userData, sendTime ))
