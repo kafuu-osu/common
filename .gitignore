@@ -3,4 +3,5 @@
 .idea
 *.c
 *.so
+*.pyd
 config.json
