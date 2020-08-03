@@ -2,11 +2,12 @@ import time
 import requests
 import json
 try:
-    from pymysql.err import ProgrammingError
+	from pymysql.err import ProgrammingError
 except ImportError:
-    from MySQLdb._exceptions import ProgrammingError
+	from MySQLdb._exceptions import ProgrammingError
 
 from common import generalUtils
+from common import timeUtils
 from common.constants import gameModes, mods
 from common.constants import privileges
 from common.log import logUtils as log
@@ -778,10 +779,10 @@ def updateStatsRx(userID, score_):
 		"UPDATE rx_stats SET total_score_{m}=total_score_{m}+%s, playcount_{m}=playcount_{m}+1, "
 		"playtime_{m} = playtime_{m} + %s "
 		"WHERE id = %s LIMIT 1".format(
-            m=mode
-        ),
-        (score_.score, realPlayTime, userID)
-    )
+			m=mode
+		),
+		(score_.score, realPlayTime, userID)
+	)
 
 	# Calculate new level and update it
 	updateLevelRX(userID, score_.gameMode)
@@ -828,10 +829,10 @@ def updateStatsAP(userID, score_):
 		"UPDATE ap_stats SET total_score_{m}=total_score_{m}+%s, playcount_{m}=playcount_{m}+1, "
 		"playtime_{m} = playtime_{m} + %s "
 		"WHERE id = %s LIMIT 1".format(
-            m=mode
-        ),
-        (score_.score, realPlayTime, userID)
-    )
+			m=mode
+		),
+		(score_.score, realPlayTime, userID)
+	)
 
 	# Calculate new level and update it
 	updateLevelAP(userID, score_.gameMode)
@@ -1391,7 +1392,65 @@ def setCountry(userID, country):
 	:return:
 	"""
 	glob.db.execute("UPDATE users_stats SET country = %s WHERE id = %s LIMIT 1", [country, userID])
+	
+def getList(list, index, default=None):
+	try:
+		return list[index]
+	except:
+		return default
 
+def saveLoginRecord(userID, client, ip, status, country, latitude, longitude, clientData=[], note=""):
+	countFailed = 0
+	countSuccess = 0
+		
+	userRecord = glob.db.fetch("SELECT * FROM users_login_records WHERE userid = %s LIMIT 1", [userID])
+
+	lastLogin = timeUtils.getTime(1)
+	mac = getList(clientData, 2, "")
+	unique = getList(clientData, 3, "")
+	disk = getList(clientData, 4, "")
+	record = {
+		"client": client, 
+		"ip": ip, 
+		"country": country, 
+		"latitude": latitude, 
+		"longitude": longitude, 
+		"status": status, 
+		"note": note, 
+		"mac": mac,
+		"unique": unique,
+		"disk": disk,
+		"time": lastLogin
+	}
+
+	if not userRecord or userRecord.get("records") in (None, ""):
+		count = 1
+		record["note"] = "first login record" + (f":{note}" if note else "")
+		if status == "success": countSuccess = 1
+		else: countFailed = 1
+  
+		loginRecords = [record]
+		glob.db.execute("INSERT INTO users_login_records (userid, records, count, count_success, count_failed, last_login) VALUES (%s, %s, %s, %s, %s, %s)", [
+			userID, json.dumps(loginRecords), count, countSuccess, countFailed, lastLogin
+		])
+
+	else:
+		count = userRecord["count"] + 1
+		countFailed = userRecord["count_failed"]
+		countSuccess = userRecord["count_success"]
+  
+		if status == "success": countSuccess += 1
+		else: countFailed += 1
+	
+		loginRecords = json.loads(userRecord["records"])
+		loginRecords.insert(0, record)
+		if len(userRecord) > 15: del(userRecord[-1])
+
+		glob.db.execute("UPDATE users_login_records SET records = %s, count = %s, count_success = %s, count_failed = %s, last_login = %s WHERE userid = %s LIMIT 1", [
+			json.dumps(loginRecords), count, countSuccess, countFailed, lastLogin, userID
+		])
+
+		
 def logIP(userID, ip):
 	"""
 	User IP log
