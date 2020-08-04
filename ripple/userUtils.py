@@ -1420,6 +1420,7 @@ def saveLoginRecord(userID, client, ip, status, country, latitude, longitude, cl
 		"mac": mac,
 		"unique": unique,
 		"disk": disk,
+		"login_type": "client",
 		"time": lastLogin
 	}
 
