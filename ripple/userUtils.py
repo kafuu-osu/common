@@ -26,7 +26,7 @@ def getBeatmapTime(beatmapID):
     for address in addresses:
         try:
             address = address.format(beatmapID)
-            response = requests.get(address)
+            response = requests.get(address, timeout=5)
             if response.status_code != 200:
                 log.error("ERROR WHEN: getBeatmapTime, address[{}], plesase check status_code".format(address))
                 continue
